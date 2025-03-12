@@ -21,7 +21,6 @@ import { I18nCommonKey } from '@/types/i18next';
 import { InfoOutlineIcon } from '@chakra-ui/icons';
 import {
   Box,
-  Button,
   Center,
   Checkbox,
   Collapse,
@@ -37,14 +36,13 @@ import {
   NumberInputStepper,
   Switch,
   Text,
-  useDisclosure,
   useTheme
 } from '@chakra-ui/react';
 import { MySelect, MySlider, MyTooltip, RangeInput, Tabs } from '@sealos/ui';
 import { throttle } from 'lodash';
 import { useTranslation } from 'next-i18next';
 import { useRouter } from 'next/router';
-import { MutableRefObject, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { UseFormReturn } from 'react-hook-form';
 
 const Form = ({
@@ -111,6 +109,84 @@ const Form = ({
     };
     // eslint-disable-next-line
   }, []);
+
+  function useMinResources(dbType: string) {
+    let [minCPU, minMemory, minStorage] = [500, 512, 3];
+    function setAdvisableResources([minCPU, minMemory, minStorage]: Array<number>) {
+      const [AdvisableCPU, AdvisableMemory] = [
+        Math.ceil(minCPU / 1000 + 0.1) * 1000,
+        Math.ceil(minMemory / 2048 + 0.1) * 2048
+      ];
+      if (getValues('cpu') <= AdvisableCPU) {
+        setValue('cpu', AdvisableCPU);
+      }
+      if (getValues('memory') <= AdvisableMemory) {
+        setValue('memory', AdvisableMemory);
+      }
+      if (getValues('storage') < minStorage) {
+        setValue('storage', minStorage);
+      }
+    }
+    if (dbType === DBTypeEnum.kafka) {
+      [minCPU, minMemory, minStorage] = [2000, 2048, 8];
+      setAdvisableResources([minCPU, minMemory, minStorage]);
+    } else if (dbType === DBTypeEnum.milvus) {
+      [minCPU, minMemory, minStorage] = [1500, 1536, 6];
+      setAdvisableResources([minCPU, minMemory, minStorage]);
+    } else {
+      return {
+        minCpuIndex: 0,
+        minMemoryIndex: 0,
+        CpuMarkList: CpuSlideMarkList,
+        MemoryMarkList: MemorySlideMarkList,
+        minStorage: 3
+      };
+    }
+    const minCpuIndex = CpuSlideMarkList.findLastIndex((item) => item.value <= minCPU);
+    const minMemoryIndex = MemorySlideMarkList.findLastIndex((item) => item.value <= minMemory);
+    let CpuMarkList = CpuSlideMarkList.map((item, index) => {
+      if (item.value < minCPU) {
+        return { ...item, label: '' };
+      }
+      return item;
+    });
+    let MemoryMarkList = MemorySlideMarkList.map((item, index) => {
+      if (item.value < minCPU) {
+        return { ...item, label: '' };
+      }
+      return item;
+    });
+    CpuMarkList[minCpuIndex] = { label: minCPU / 1000, value: minCPU };
+    MemoryMarkList[minMemoryIndex] = { label: `${minMemory / 1024}G`, value: minMemory };
+    console.log(1111);
+    return { minCpuIndex, minMemoryIndex, CpuMarkList, MemoryMarkList, minStorage };
+  }
+
+  type ResourcesState = {
+    minCpuIndex: number;
+    minMemoryIndex: number;
+    CpuMarkList: {
+      label: number | string;
+      value: number;
+    }[];
+    MemoryMarkList: {
+      label: string;
+      value: number;
+    }[];
+  };
+
+  const [resources, setResources] = useState<ResourcesState>({
+    minCpuIndex: 0,
+    minMemoryIndex: 0,
+    CpuMarkList: CpuSlideMarkList,
+    MemoryMarkList: MemorySlideMarkList
+  });
+
+  function handelChangeDbType(id: DBTypeEnum) {
+    setValue('dbType', id);
+    setValue('dbVersion', DBVersionMap[getValues('dbType')][0].id);
+    setResources(useMinResources(getValues('dbType')));
+  }
 
   const Label = ({
     children,
@@ -295,8 +371,7 @@ const Form = ({
                               })}
                           onClick={() => {
                             if (isEdit) return;
-                            setValue('dbType', item.id);
-                            setValue('dbVersion', DBVersionMap[getValues('dbType')][0].id);
+                            handelChangeDbType(item.id);
                           }}
                         >
                           <Image
@@ -359,13 +434,13 @@ const Form = ({
               <Flex mb={10} pr={3} alignItems={'flex-start'}>
                 <Label w={100}>CPU</Label>
                 <MySlider
-                  markList={CpuSlideMarkList}
+                  markList={resources.CpuMarkList}
                   activeVal={getValues('cpu')}
                   setVal={(e) => {
-                    setValue('cpu', CpuSlideMarkList[e].value);
+                    setValue('cpu', resources.CpuMarkList[e].value);
                   }}
-                  max={CpuSlideMarkList.length - 1}
-                  min={0}
+                  max={resources.CpuMarkList.length - 1}
+                  min={resources.minCpuIndex}
                   step={1}
                 />
                 <Box ml={5} transform={'translateY(10px)'} color={'grayModern.600'}>
@@ -375,13 +450,13 @@ const Form = ({
               <Flex mb={'50px'} pr={3} alignItems={'center'}>
                 <Label w={100}>{t('memory')}</Label>
                 <MySlider
-                  markList={MemorySlideMarkList}
+                  markList={resources.MemoryMarkList}
                   activeVal={getValues('memory')}
                   setVal={(e) => {
-                    setValue('memory', MemorySlideMarkList[e].value);
+                    setValue('memory', resources.MemoryMarkList[e].value);
                   }}
-                  max={MemorySlideMarkList.length - 1}
-                  min={0}
+                  max={resources.MemoryMarkList.length - 1}
+                  min={resources.minMemoryIndex}
                   step={1}
                 />
               </Flex>

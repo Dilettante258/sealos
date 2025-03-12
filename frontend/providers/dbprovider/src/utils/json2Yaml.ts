@@ -36,16 +36,34 @@ export const json2CreateCluster = (
     storageClassName?: string;
   }
 ) => {
-  const resources = {
-    limits: {
-      cpu: `${str2Num(Math.floor(data.cpu))}m`,
-      memory: `${str2Num(data.memory)}Mi`
-    },
-    requests: {
-      cpu: `${Math.floor(str2Num(data.cpu) * 0.1)}m`,
-      memory: `${Math.floor(str2Num(data.memory) * 0.1)}Mi`
+  function divideResources(DBType: DBType) {
+    let cpu, memory;
+    switch (DBType) {
+      case DBTypeEnum.kafka:
+        cpu = data.cpu / 4;
+        memory = data.memory / 4;
+        break;
+      case DBTypeEnum.milvus:
+        cpu = data.cpu / 3;
+        memory = data.memory / 3;
+        break;
+      default:
+        cpu = data.cpu;
+        memory = data.memory;
     }
-  };
+    return {
+      limits: {
+        cpu: `${str2Num(Math.floor(cpu))}m`,
+        memory: `${str2Num(memory)}Mi`
+      },
+      requests: {
+        cpu: `${Math.floor(str2Num(cpu) * 0.1)}m`,
+        memory: `${Math.floor(str2Num(memory) * 0.1)}Mi`
+      }
+    };
+  }
+  const resources = divideResources(data.dbType);
+
   const terminationPolicy = backupInfo?.name ? 'WipeOut' : 'Delete';
   const metadata = {
     finalizers: ['cluster.kubeblocks.io/finalizer'],
@@ -295,6 +313,8 @@ export const json2CreateCluster = (
         }
       }
     ],
+
+    // TODO:
     [DBTypeEnum.kafka]: [
       {
         apiVersion: 'apps.kubeblocks.io/v1alpha1',
