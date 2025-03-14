@@ -95,10 +95,7 @@ export type MigrateForm = {
   dbType: DBType;
   dbVersion: string;
   dbName: string;
-  replicas: number;
-  cpu: number;
-  memory: number;
-  storage: number;
+  resources: Array<ResourceType>;
   labels: Record<string, string>;
 
   sinkHost: string;

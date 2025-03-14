@@ -34,7 +34,7 @@ import {
 } from '@chakra-ui/react';
 import { CurrencySymbol, MyTooltip, useMessage } from '@sealos/ui';
 import { useQuery } from '@tanstack/react-query';
-import { pick } from 'lodash';
+import { pick, sum } from 'lodash';
 import { useTranslation } from 'next-i18next';
 import { useCallback, useMemo, useState } from 'react';
 import { sealosApp } from 'sealos-desktop-sdk/app';
@@ -188,12 +188,12 @@ const AppBaseInfo = ({ db = defaultDBDetail }: { db: DBDetailType }) => {
         name: 'config_info',
         iconName: 'settings',
         items: [
-          { label: 'limit_cpu', value: `${db.cpu / 1000} Core` },
+          { label: 'limit_cpu', value: `${sum(db.resources.map((item) => item.cpu)) / 1000} Core` },
           {
             label: 'limit_memory',
-            value: printMemory(db.memory)
+            value: printMemory(sum(db.resources.map((item) => item.memory)))
           },
-          { label: 'storage', value: `${db.storage}Gi` }
+          { label: 'storage', value: `${sum(db.resources.map((item) => item.storage))}Gi` }
         ]
       }
     ],

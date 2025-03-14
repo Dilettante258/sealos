@@ -8,7 +8,7 @@ import { useGlobalStore } from '@/store/global';
 import { DBVersionMap } from '@/store/static';
 import { useUserStore } from '@/store/user';
 import type { YamlItemType } from '@/types';
-import type { DBEditType } from '@/types/db';
+import type { DBComponentsName, DBEditType } from '@/types/db';
 import { adaptDBForm, convertBackupFormToSpec } from '@/utils/adapt';
 import { serviceSideProps } from '@/utils/i18n';
 import { json2Account, json2CreateCluster, limitRangeYaml } from '@/utils/json2Yaml';
@@ -26,6 +26,7 @@ import Header from './components/Header';
 import Yaml from './components/Yaml';
 import useDriver from '@/hooks/useDriver';
 import { updateBackupPolicy } from '@/api/backup';
+import { create } from 'zustand';
 
 const ErrorModal = dynamic(() => import('@/components/ErrorModal'));
 
@@ -34,6 +35,24 @@ const defaultEdit = {
   dbVersion: DBVersionMap.postgresql[0]?.id
 };
 
+interface FormState {
+  selectComponent: DBComponentsName;
+  validFieldIndexs: number[];
+  setSelectComponent: (state: DBComponentsName) => void;
+  setValidFieldIndexs: (state: number[]) => void;
+}
+
+export const useFormStateStore = create<FormState>((set) => ({
+  selectComponent: 'postgresql',
+  validFieldIndexs: [0],
+  setSelectComponent: (state: DBComponentsName) => {
+    set({ selectComponent: state });
+  },
+  setValidFieldIndexs: (state: number[]) => {
+    set({ validFieldIndexs: state });
+  }
+}));
+
 const EditApp = ({ dbName, tabType }: { dbName?: string; tabType?: 'form' | 'yaml' }) => {
   const { startGuide, isGuided } = useDriver();
   const { t } = useTranslation();
@@ -41,7 +60,9 @@ const EditApp = ({ dbName, tabType }: { dbName?: string; tabType?: 'form' | 'yam
   const [yamlList, setYamlList] = useState<YamlItemType[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [forceUpdate, setForceUpdate] = useState(false);
-  const [minStorage, setMinStorage] = useState(1);
+  const [minStorage, setMinStorage] = useState<Partial<Record<DBComponentsName, number>>>({
+    postgresql: 1
+  });
   const { message: toast } = useMessage();
   const { Loading, setIsLoading } = useLoading();
   const { loadDBDetail, dbDetail } = useDBStore();
@@ -53,6 +74,8 @@ const EditApp = ({ dbName, tabType }: { dbName?: string; tabType?: 'form' | 'yam
     content: t(applyMessage)
   });
   const isEdit = useMemo(() => !!dbName, [dbName]);
+
+  const { validFieldIndexs } = useFormStateStore();
 
   // compute container width
   const { screenWidth, lastRoute } = useGlobalStore();
@@ -71,7 +94,7 @@ const EditApp = ({ dbName, tabType }: { dbName?: string; tabType?: 'form' | 'yam
 
   useEffect(() => {
     if (isGuided) {
-      formHook.setValue('storage', 1);
+      formHook.setValue('resources.0.storage', 1);
     }
   }, [isGuided]);
 
@@ -111,8 +134,17 @@ const EditApp = ({ dbName, tabType }: { dbName?: string; tabType?: 'form' | 'yam
   });
 
   const submitSuccess = async (formData: DBEditType) => {
-    const needMongoAdapter =
-      formData.dbType === 'mongodb' && formData.replicas !== oldDBEditData.current?.replicas;
+    const resources = formData.resources.filter((_item, index) => validFieldIndexs.includes(index));
+    let needMongoAdapter = false;
+    if (formData.dbType === 'mongodb') {
+      const replicas = formData.resources.findLast((item) => item.name === 'mongodb')?.replicas;
+      const oldReplicas = oldDBEditData.current?.resources.findLast(
+        (item) => item.name === 'mongodb'
+      )?.replicas;
+      if (replicas !== oldReplicas) {
+        needMongoAdapter = true;
+      }
+    }
     setIsLoading(true);
     try {
       !isEdit && (await applyYamlList([limitRangeYaml], 'create'));
@@ -183,9 +215,15 @@ const EditApp = ({ dbName, tabType }: { dbName?: string; tabType?: 'form' | 'yam
     {
       onSuccess(res) {
         if (!res) return;
+        res.resources.filter((_item, index) => validFieldIndexs.includes(index));
         oldDBEditData.current = res;
         formHook.reset(adaptDBForm(res));
-        setMinStorage(res.storage);
+        setMinStorage(
+          res.resources.reduce((accumulator: typeof minStorage, currentItem) => {
+            accumulator[currentItem.name] = currentItem.storage;
+            return accumulator;
+          }, {})
+        );
       },
       onError(err) {
         toast({

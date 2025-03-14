@@ -61,14 +61,40 @@ export interface DBListItemType {
   source: DBSource;
 }
 
+export interface ResourceType {
+  name: DBComponentsName;
+  cpu: number;
+  memory: number;
+  replicas: number;
+  storage: number;
+}
+
+export type DBComponentsName =
+  | 'postgresql'
+  | 'mongodb'
+  | 'mysql'
+  | 'redis'
+  | 'redis-sentinel'
+  | 'kafka'
+  | 'kafka-server'
+  | 'kafka-broker'
+  | 'controller'
+  | 'kafka-exporter'
+  | 'milvus'
+  | 'etcd'
+  | 'minio'
+  | 'qdrant'
+  | 'nebula-console'
+  | 'nebula-graphd'
+  | 'nebula-metad'
+  | 'nebula-storaged'
+  | 'weaviate';
+
 export interface DBEditType {
   dbType: DBType;
   dbVersion: string;
   dbName: string;
-  replicas: number;
-  cpu: number;
-  memory: number;
-  storage: number;
+  resources: Array<ResourceType>;
   labels: { [key: string]: string };
   terminationPolicy: KubeBlockClusterTerminationPolicy;
   autoBackup?: AutoBackupFormType;

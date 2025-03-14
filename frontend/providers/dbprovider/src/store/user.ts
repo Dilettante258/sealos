@@ -1,5 +1,5 @@
 import { getUserQuota } from '@/api/platform';
-import { DBEditType } from '@/types/db';
+import { DBEditType, ResourceType } from '@/types/db';
 import { I18nCommonKey } from '@/types/i18next';
 import { UserQuotaItemType } from '@/types/user';
 import { create } from 'zustand';
@@ -11,6 +11,20 @@ type State = {
   userQuota: UserQuotaItemType[];
   loadUserQuota: () => Promise<null>;
   checkQuotaAllow: (request: DBEditType, usedData?: DBEditType) => I18nCommonKey | undefined;
+};
+
+const calculateResourceConsumption = (
+  resources: ResourceType[]
+): { cpu: number; memory: number; storage: number } => {
+  return resources.reduce(
+    (accumulator, currentResource) => {
+      accumulator.cpu += (currentResource.cpu / 1000) * currentResource.replicas;
+      accumulator.memory += (currentResource.memory / 1024) * currentResource.replicas;
+      accumulator.storage += currentResource.storage * currentResource.replicas;
+      return accumulator;
+    },
+    { cpu: 0, memory: 0, storage: 0 }
+  );
 };
 
 export const useUserStore = create<State>()(
@@ -26,23 +40,16 @@ export const useUserStore = create<State>()(
         });
         return null;
       },
-      checkQuotaAllow: (
-        { cpu, memory, storage, replicas },
-        usedData
-      ): I18nCommonKey | undefined => {
+      checkQuotaAllow: ({ resources }, usedData): I18nCommonKey | undefined => {
         const quote = get().userQuota;
 
-        const request = {
-          cpu: (cpu / 1000) * replicas,
-          memory: (memory / 1024) * replicas,
-          storage: storage * replicas
-        };
+        const request = calculateResourceConsumption(resources);
 
         if (usedData) {
-          const { cpu, memory, storage, replicas } = usedData;
-          request.cpu -= (cpu / 1000) * replicas;
-          request.memory -= (memory / 1024) * replicas;
-          request.storage -= storage * replicas;
+          const used = calculateResourceConsumption(usedData.resources);
+          request.cpu -= used.cpu;
+          request.memory -= used.memory;
+          request.storage -= used.storage;
         }
 
         const overLimitTip: { [key: string]: I18nCommonKey } = {

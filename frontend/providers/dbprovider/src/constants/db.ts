@@ -4,7 +4,8 @@ import {
   PodDetailType,
   DBType,
   ReconfigStatusMapType,
-  DBSourceType
+  DBSourceType,
+  DBComponentsName
 } from '@/types/db';
 import { CpuSlideMarkList, MemorySlideMarkList } from './editApp';
 import { I18nCommonKey } from '@/types/i18next';
@@ -265,14 +266,35 @@ export const DBBackupMethodNameMap = {
   [DBTypeEnum.milvus]: 'milvus'
 };
 
+export const BasicResources = {
+  cpu: 1000,
+  memory: 1024,
+  storage: 3,
+  replicas: 1
+};
+
+export const DBComponents: Record<DBType, Array<DBComponentsName>> = {
+  [DBTypeEnum.postgresql]: ['postgresql'],
+  [DBTypeEnum.mongodb]: ['mongodb'],
+  [DBTypeEnum.mysql]: ['mysql'],
+  [DBTypeEnum.redis]: ['redis', 'redis-sentinel'],
+  [DBTypeEnum.kafka]: ['kafka-server', 'kafka-broker', 'controller', 'kafka-exporter'],
+  [DBTypeEnum.qdrant]: ['qdrant'],
+  [DBTypeEnum.nebula]: ['nebula-console', 'nebula-graphd', 'nebula-metad', 'nebula-storaged'],
+  [DBTypeEnum.weaviate]: ['weaviate'],
+  [DBTypeEnum.milvus]: ['milvus', 'etcd', 'minio']
+};
+
 export const defaultDBEditValue: DBEditType = {
   dbType: DBTypeEnum.postgresql,
   dbVersion: '',
   dbName: 'test-db',
-  replicas: 1,
-  cpu: CpuSlideMarkList[1].value,
-  memory: MemorySlideMarkList[1].value,
-  storage: 3,
+  resources: [
+    {
+      name: 'postgresql',
+      ...BasicResources
+    }
+  ],
   labels: {},
   autoBackup: {
     start: true,

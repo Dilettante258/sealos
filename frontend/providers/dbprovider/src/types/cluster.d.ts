@@ -33,8 +33,8 @@ export interface KubeBlockClusterSpec {
   clusterVersionRef: string;
   terminationPolicy: KubeBlockClusterTerminationPolicy;
   componentSpecs: {
-    componentDefRef: `${DBTypeEnum}`;
-    name: `${DBTypeEnum}`;
+    componentDefRef: DBComponentsName;
+    name: DBComponentsName;
     replicas: number;
     resources: {
       limits: {

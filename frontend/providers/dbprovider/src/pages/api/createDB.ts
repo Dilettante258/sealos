@@ -3,13 +3,51 @@ import { getK8s } from '@/services/backend/kubernetes';
 import { jsonRes } from '@/services/backend/response';
 import { ApiResp } from '@/services/kubernet';
 import { KbPgClusterType } from '@/types/cluster';
-import { BackupItemType, DBEditType } from '@/types/db';
+import { BackupItemType, DBComponentsName, DBEditType, ResourceType } from '@/types/db';
 import { json2Account, json2ResourceOps, json2CreateCluster } from '@/utils/json2Yaml';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { updateBackupPolicyApi } from './backup/updatePolicy';
-import { BackupSupportedDBTypeList } from '@/constants/db';
+import { BackupSupportedDBTypeList, DBComponents } from '@/constants/db';
 import { adaptDBDetail, convertBackupFormToSpec } from '@/utils/adapt';
 import { CustomObjectsApi, PatchUtils } from '@kubernetes/client-node';
+import { isEqual } from 'lodash';
+
+function compareResourceChanges(arr1: ResourceType[], arr2: ResourceType[]) {
+  const changes: Array<{
+    type: 'VerticalScaling' | 'HorizontalScaling' | 'VolumeExpansion';
+    name: DBComponentsName;
+  }> = [];
+
+  arr1.forEach((item1) => {
+    const correspondingItem = arr2.find(
+      (item2) => item1.name === item2.name && !isEqual(item1, item2)
+    );
+    if (correspondingItem !== undefined) {
+      for (const key of Object.keys(item1) as (keyof ResourceType)[]) {
+        if (item1[key] !== correspondingItem[key]) {
+          let type: 'VerticalScaling' | 'HorizontalScaling' | 'VolumeExpansion' = 'VolumeExpansion';
+          switch (key) {
+            case 'cpu':
+            case 'memory':
+              type = 'VerticalScaling';
+              break;
+            case 'replicas':
+              type = 'HorizontalScaling';
+              break;
+            case 'storage':
+              type = 'VolumeExpansion';
+              break;
+          }
+          changes.push({
+            type,
+            name: item1.name
+          });
+        }
+      }
+    }
+  });
+  return changes;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<ApiResp>) {
   try {
@@ -33,33 +71,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       )) as {
         body: KbPgClusterType;
       };
-      const { cpu, memory, replicas, storage, terminationPolicy } = adaptDBDetail(body);
+      // resources is legal: not inclued dirty data
+      const { resources, terminationPolicy } = adaptDBDetail(body);
+      const newResources = dbForm.resources.filter((item) =>
+        DBComponents[dbForm.dbType].includes(item.name)
+      );
 
-      const opsRequests = [];
+      const opsRequests: string[] = [];
 
-      if (cpu !== dbForm.cpu || memory !== dbForm.memory) {
-        const verticalScalingYaml = json2ResourceOps(dbForm, 'VerticalScaling');
-        opsRequests.push(verticalScalingYaml);
-      }
+      const change = compareResourceChanges(newResources, resources);
 
-      if (replicas !== dbForm.replicas) {
-        const horizontalScalingYaml = json2ResourceOps(dbForm, 'HorizontalScaling');
-        opsRequests.push(horizontalScalingYaml);
-      }
-
-      if (dbForm.storage > storage) {
-        const volumeExpansionYaml = json2ResourceOps(dbForm, 'VolumeExpansion');
-        opsRequests.push(volumeExpansionYaml);
-      }
+      change.map((item) => {
+        const changeYaml = json2ResourceOps(dbForm, item.name, item.type);
+        opsRequests.push(changeYaml);
+      });
 
       console.log('DB Edit Operation:', {
         dbName: dbForm.dbName,
-        changes: {
-          cpu: cpu !== dbForm.cpu,
-          memory: memory !== dbForm.memory,
-          replicas: replicas !== dbForm.replicas,
-          storage: dbForm.storage > storage
-        },
+        changes: change,
         opsCount: opsRequests.length
       });
 

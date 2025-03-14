@@ -1,6 +1,7 @@
 import { BACKUP_REMARK_LABEL_KEY, BackupTypeEnum, backupStatusMap } from '@/constants/backup';
 import {
   DBBackupMethodNameMap,
+  DBComponents,
   DBNameLabel,
   DBPreviousConfigKey,
   DBReconfigStatusMap,
@@ -11,6 +12,7 @@ import {
 import type { AutoBackupFormType, AutoBackupType, BackupCRItemType } from '@/types/backup';
 import type { KbPgClusterType, KubeBlockOpsRequestType } from '@/types/cluster';
 import type {
+  DBComponentsName,
   DBDetailType,
   DBEditType,
   DBListItemType,
@@ -18,7 +20,8 @@ import type {
   DBType,
   OpsRequestItemType,
   PodDetailType,
-  PodEvent
+  PodEvent,
+  ResourceType
 } from '@/types/db';
 import { InternetMigrationCR, MigrateItemType } from '@/types/migrate';
 import {
@@ -94,16 +97,20 @@ export const adaptDBListItem = (db: KbPgClusterType): DBListItemType => {
 };
 
 export const adaptDBDetail = (db: KbPgClusterType): DBDetailType => {
-  let cpu = 0;
-  let memory = 0;
-  let storage = 0;
-  db.spec?.componentSpecs.forEach((comp) => {
-    cpu += cpuFormatToM(comp?.resources?.limits?.cpu || '0');
-    memory += memoryFormatToMi(comp?.resources?.limits?.memory || '0');
-    storage += storageFormatToNum(
-      comp?.volumeClaimTemplates?.[0]?.spec?.resources?.requests?.storage || '0'
-    );
-  });
+  const dbType = db?.metadata?.labels['clusterdefinition.kubeblocks.io/name'] || 'postgresql';
+  const resources: ResourceType[] = db.spec?.componentSpecs
+    .filter((comp) => DBComponents[dbType].includes(comp.name))
+    .map((comp) => {
+      return {
+        name: comp.name,
+        cpu: cpuFormatToM(comp.resources?.limits?.cpu || '0'),
+        memory: memoryFormatToMi(comp.resources?.limits?.memory || '0'),
+        storage: storageFormatToNum(
+          comp.volumeClaimTemplates?.[0]?.spec?.resources?.requests?.storage || '0'
+        ),
+        replicas: comp.replicas || 1
+      };
+    });
 
   return {
     id: db.metadata?.uid || ``,
@@ -112,13 +119,10 @@ export const adaptDBDetail = (db: KbPgClusterType): DBDetailType => {
       db?.status?.phase && dbStatusMap[db?.status?.phase]
         ? dbStatusMap[db?.status?.phase]
         : dbStatusMap.UnKnow,
-    dbType: db?.metadata?.labels['clusterdefinition.kubeblocks.io/name'] || 'postgresql',
+    dbType,
     dbVersion: db?.metadata?.labels['clusterversion.kubeblocks.io/name'] || '',
     dbName: db.metadata?.name || 'db name',
-    replicas: db.spec?.componentSpecs?.[0]?.replicas || 1,
-    cpu,
-    memory,
-    storage,
+    resources,
     conditions: db?.status?.conditions || [],
     isDiskSpaceOverflow: false,
     labels: db.metadata.labels || {},
@@ -174,26 +178,16 @@ export const convertBackupFormToSpec = (data: {
 };
 
 export const adaptDBForm = (db: DBDetailType): DBEditType => {
-  const keys: Record<keyof DBEditType, any> = {
-    dbType: 1,
-    dbVersion: 1,
-    dbName: 1,
-    cpu: 1,
-    memory: 1,
-    replicas: 1,
-    storage: 1,
-    labels: 1,
-    autoBackup: 1,
-    terminationPolicy: 1
+  const newForm: DBEditType = {
+    dbType: db.dbType,
+    dbVersion: db.dbVersion,
+    dbName: db.dbName,
+    resources: db.resources || [],
+    labels: db.labels || {},
+    terminationPolicy: db.terminationPolicy || 'Delete',
+    autoBackup: db.autoBackup
   };
-  const form: any = {};
-
-  for (const key in keys) {
-    // @ts-ignore
-    form[key] = db[key];
-  }
-
-  return form;
+  return newForm;
 };
 
 export const adaptPod = (pod: V1Pod): PodDetailType => {

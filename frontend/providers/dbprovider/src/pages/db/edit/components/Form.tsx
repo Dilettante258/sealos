@@ -5,6 +5,7 @@ import QuotaBox from '@/components/QuotaBox';
 import Tip from '@/components/Tip';
 import {
   BackupSupportedDBTypeList,
+  DBComponents,
   DBTypeEnum,
   DBTypeList,
   RedisHAConfig,
@@ -16,14 +17,13 @@ import useEnvStore from '@/store/env';
 import { DBVersionMap, INSTALL_ACCOUNT } from '@/store/static';
 import type { QueryType } from '@/types';
 import { AutoBackupType } from '@/types/backup';
-import type { DBEditType } from '@/types/db';
+import type { DBComponentsName, DBEditType, DBType, ResourceType } from '@/types/db';
 import { I18nCommonKey } from '@/types/i18next';
 import { InfoOutlineIcon } from '@chakra-ui/icons';
 import {
   Box,
   Center,
   Checkbox,
-  Collapse,
   Flex,
   FormControl,
   Grid,
@@ -39,11 +39,19 @@ import {
   useTheme
 } from '@chakra-ui/react';
 import { MySelect, MySlider, MyTooltip, RangeInput, Tabs } from '@sealos/ui';
-import { throttle } from 'lodash';
+import { get, sum, throttle } from 'lodash';
 import { useTranslation } from 'next-i18next';
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useState } from 'react';
-import { UseFormReturn } from 'react-hook-form';
+import { memo, useEffect, useMemo, useState } from 'react';
+import { useFieldArray, UseFormReturn } from 'react-hook-form';
+import { useFormStateStore } from '..';
+
+const BasicResources = {
+  cpu: 1000,
+  memory: 1024,
+  storage: 3,
+  replicas: 1
+};
 
 const Form = ({
   formHook,
@@ -52,15 +60,15 @@ const Form = ({
 }: {
   formHook: UseFormReturn<DBEditType, any>;
   pxVal: number;
-  minStorage: number;
+  minStorage: Partial<Record<DBComponentsName, number>>;
 }) => {
   if (!formHook) return null;
   const { t } = useTranslation();
   const { SystemEnv } = useEnvStore();
   const router = useRouter();
-  const { name } = router.query as QueryType;
+  const { name: name_ } = router.query as QueryType;
   const theme = useTheme();
-  const isEdit = useMemo(() => !!name, [name]);
+  const isEdit = useMemo(() => !!name_, [name_]);
   const {
     register,
     setValue,
@@ -80,6 +88,8 @@ const Form = ({
       icon: 'backupSettings'
     }
   ];
+
+  //TODO: backup
 
   const [activeNav, setActiveNav] = useState(navList[0].id);
 
@@ -110,82 +120,43 @@ const Form = ({
     // eslint-disable-next-line
   }, []);
 
-  function useMinResources(dbType: string) {
-    let [minCPU, minMemory, minStorage] = [500, 512, 3];
-    function setAdvisableResources([minCPU, minMemory, minStorage]: Array<number>) {
-      const [AdvisableCPU, AdvisableMemory] = [
-        Math.ceil(minCPU / 1000 + 0.1) * 1000,
-        Math.ceil(minMemory / 2048 + 0.1) * 2048
-      ];
-      if (getValues('cpu') <= AdvisableCPU) {
-        setValue('cpu', AdvisableCPU);
-      }
-      if (getValues('memory') <= AdvisableMemory) {
-        setValue('memory', AdvisableMemory);
-      }
-      if (getValues('storage') < minStorage) {
-        setValue('storage', minStorage);
-      }
-    }
-    if (dbType === DBTypeEnum.kafka) {
-      [minCPU, minMemory, minStorage] = [2000, 2048, 8];
-      setAdvisableResources([minCPU, minMemory, minStorage]);
-    } else if (dbType === DBTypeEnum.milvus) {
-      [minCPU, minMemory, minStorage] = [1500, 1536, 6];
-      setAdvisableResources([minCPU, minMemory, minStorage]);
-    } else {
-      return {
-        minCpuIndex: 0,
-        minMemoryIndex: 0,
-        CpuMarkList: CpuSlideMarkList,
-        MemoryMarkList: MemorySlideMarkList,
-        minStorage: 3
-      };
-    }
-    const minCpuIndex = CpuSlideMarkList.findLastIndex((item) => item.value <= minCPU);
-    const minMemoryIndex = MemorySlideMarkList.findLastIndex((item) => item.value <= minMemory);
-    let CpuMarkList = CpuSlideMarkList.map((item, index) => {
-      if (item.value < minCPU) {
-        return { ...item, label: '' };
-      }
-      return item;
-    });
-    let MemoryMarkList = MemorySlideMarkList.map((item, index) => {
-      if (item.value < minCPU) {
-        return { ...item, label: '' };
-      }
-      return item;
-    });
-    CpuMarkList[minCpuIndex] = { label: minCPU / 1000, value: minCPU };
-    MemoryMarkList[minMemoryIndex] = { label: `${minMemory / 1024}G`, value: minMemory };
-    console.log(1111);
-    return { minCpuIndex, minMemoryIndex, CpuMarkList, MemoryMarkList, minStorage };
-  }
+  const { selectComponent, setSelectComponent, validFieldIndexs, setValidFieldIndexs } =
+    useFormStateStore();
 
-  type ResourcesState = {
-    minCpuIndex: number;
-    minMemoryIndex: number;
-    CpuMarkList: {
-      label: number | string;
-      value: number;
-    }[];
-    MemoryMarkList: {
-      label: string;
-      value: number;
-    }[];
-  };
-
-  const [resources, setResources] = useState<ResourcesState>({
-    minCpuIndex: 0,
-    minMemoryIndex: 0,
-    CpuMarkList: CpuSlideMarkList,
-    MemoryMarkList: MemorySlideMarkList
-  });
-
-  function handelChangeDbType(id: DBTypeEnum) {
+  function handleChangeDbType(id: DBType) {
     setValue('dbType', id);
     setValue('dbVersion', DBVersionMap[getValues('dbType')][0].id);
-    setResources(useMinResources(getValues('dbType')));
+    const temp = getValues('resources').map((item) => item.name);
+    const lackComp = DBComponents[id].filter((item) => !temp.includes(item));
+
+    if (lackComp.length > 0) {
+      append(
+        lackComp.map((item) => {
+          return {
+            name: item as DBComponentsName,
+            ...BasicResources
+          };
+        })
+      );
+    }
+    const ValidIndexs = fields
+      .map((item, index) => {
+        return { value: item, index: index };
+      })
+      .filter(({ value }) => DBComponents[getValues('dbType')].includes(value.name))
+      .map((item) => item.index);
+    setSelectComponent(DBComponents[id][0] as DBComponentsName);
+    setValidFieldIndexs(ValidIndexs);
+  }
+
+  const { control } = formHook;
+  const { fields, append } = useFieldArray({
+    control,
+    name: 'resources'
+  });
+
+  function sumNumber(name: keyof Exclude<ResourceType, 'name'>) {
+    return sum(validFieldIndexs.map((index: number) => getValues(`resources.${index}.${name}`)));
   }
 
   const Label = ({
@@ -227,6 +198,193 @@ const Form = ({
     backgroundColor: 'grayModern.50'
   };
 
+  const index = useMemo(() => {
+    console.log(111);
+    return fields.findIndex((item) => item.name === selectComponent);
+  }, [fields, selectComponent]);
+
+  function ResourceControl({ componentName }: { componentName: DBComponentsName }) {
+    console.log('render!');
+
+    function storageHadError() {
+      return Boolean(errors?.resources?.[index]?.storage?.message);
+    }
+
+    return (
+      <>
+        <Flex mb={10} pr={3} alignItems={'flex-start'}>
+          <Label w={100}>CPU</Label>
+          <MySlider
+            markList={CpuSlideMarkList}
+            activeVal={getValues(`resources.${index}.cpu`)}
+            setVal={(e) => {
+              setValue(`resources.${index}.cpu`, CpuSlideMarkList[e].value);
+            }}
+            max={CpuSlideMarkList.length - 1}
+            min={0}
+            step={1}
+          />
+          <Box ml={5} transform={'translateY(10px)'} color={'grayModern.600'}>
+            (Core)
+          </Box>
+        </Flex>
+        <Flex mb={'50px'} pr={3} alignItems={'center'}>
+          <Label w={100}>{t('memory')}</Label>
+          <MySlider
+            markList={MemorySlideMarkList}
+            activeVal={getValues(`resources.${index}.memory`)}
+            setVal={(e) => {
+              setValue(`resources.${index}.memory`, MemorySlideMarkList[e].value);
+            }}
+            max={MemorySlideMarkList.length - 1}
+            min={0}
+            step={1}
+          />
+        </Flex>
+        <Flex mb={8} alignItems={'center'}>
+          <Label w={100}>{t('Replicas')}</Label>
+          <RangeInput
+            w={180}
+            value={getValues(`resources.${index}.replicas`)}
+            min={1}
+            max={20}
+            step={
+              getValues('dbType') === DBTypeEnum.mongodb || getValues('dbType') === DBTypeEnum.mysql
+                ? 2
+                : 1
+            }
+            setVal={(val) => {
+              register(`resources.${index}.replicas`, {
+                required: t('replicas_cannot_empty'),
+                min: {
+                  value: 1,
+                  message: `${t('min_replicas')}1`
+                },
+                max: {
+                  value: 20,
+                  message: `${t('max_replicas')}20`
+                }
+              });
+              const dbType = getValues('dbType');
+              const oddVal = val % 2 === 0 ? val + 1 : val;
+              const replicasValue =
+                dbType === DBTypeEnum.mongodb || dbType === DBTypeEnum.mysql ? oddVal : val;
+              setValue(`resources.${index}.replicas`, isNaN(replicasValue) ? 1 : replicasValue);
+            }}
+          />
+
+          {getValues(`resources.${index}.replicas`) === 1 && (
+            <Tip
+              ml={4}
+              icon={<MyIcon name="warningInfo" width={'14px'}></MyIcon>}
+              text={t('single_node_tip')}
+              size="sm"
+              borderRadius={'md'}
+            />
+          )}
+          {getValues('dbType') === DBTypeEnum.redis &&
+            getValues(`resources.${index}.replicas`) > 1 && (
+              <Tip
+                ml={4}
+                icon={<InfoOutlineIcon />}
+                text={t('multi_replica_redis_tip')}
+                size="sm"
+                borderRadius={'md'}
+              />
+            )}
+          {(getValues('dbType') === DBTypeEnum.mongodb ||
+            getValues('dbType') === DBTypeEnum.mysql) &&
+            getValues(`resources.${index}.replicas`) > 1 && (
+              <Tip
+                ml={4}
+                icon={<InfoOutlineIcon />}
+                text={t('db_instances_tip', {
+                  db: getValues('dbType')
+                })}
+                size="sm"
+                borderRadius={'md'}
+              />
+            )}
+        </Flex>
+
+        <FormControl isInvalid={storageHadError()} w={'500px'}>
+          <Flex alignItems={'center'}>
+            <Label w={100}>{t('storage')}</Label>
+            <MyTooltip
+              label={`${t('storage_range')}${minStorage[componentName]}~${
+                SystemEnv.STORAGE_MAX_SIZE
+              } Gi`}
+            >
+              <NumberInput
+                w={'180px'}
+                max={SystemEnv.STORAGE_MAX_SIZE}
+                min={minStorage[componentName]}
+                step={1}
+                position={'relative'}
+                value={getValues(`resources.${index}.storage`)}
+                onChange={(e) => {
+                  console.log(fields);
+                  e !== ''
+                    ? setValue(`resources.${index}.storage`, +e)
+                    : setValue(`resources.${index}.storage`, minStorage?.[componentName] ?? 1);
+                }}
+              >
+                <NumberInputField
+                  {...register(`resources.${index}.storage`, {
+                    required: t('storage_cannot_empty'),
+                    min: {
+                      value: minStorage?.[componentName] ?? 1,
+                      message: `${t('storage_min')}${minStorage[componentName]} Gi`
+                    },
+                    max: {
+                      value: SystemEnv.STORAGE_MAX_SIZE,
+                      message: `${t('storage_max')}${SystemEnv.STORAGE_MAX_SIZE} Gi`
+                    },
+                    valueAsNumber: true
+                  })}
+                  min={minStorage[componentName]}
+                  max={SystemEnv.STORAGE_MAX_SIZE}
+                  borderRadius={'md'}
+                  borderColor={'#E8EBF0'}
+                  bg={'#F7F8FA'}
+                  _focusVisible={{
+                    borderColor: 'brightBlue.500',
+                    boxShadow: '0px 0px 0px 2.4px rgba(33, 155, 244, 0.15)',
+                    bg: '#FFF',
+                    color: '#111824'
+                  }}
+                  _hover={{
+                    borderColor: 'brightBlue.300'
+                  }}
+                />
+                <NumberInputStepper>
+                  <NumberIncrementStepper>
+                    <MyIcon name="arrowUp" width={'12px'} />
+                  </NumberIncrementStepper>
+                  <NumberDecrementStepper>
+                    <MyIcon name="arrowDown" width={'12px'} />
+                  </NumberDecrementStepper>
+                </NumberInputStepper>
+                <Box
+                  zIndex={1}
+                  position={'absolute'}
+                  right={10}
+                  top={'50%'}
+                  transform={'translateY(-50%)'}
+                  color={'grayModern.600'}
+                >
+                  Gi
+                </Box>
+              </NumberInput>
+            </MyTooltip>
+          </Flex>
+        </FormControl>
+      </>
+    );
+  }
+
+  const MemoResourceControl = memo(ResourceControl);
+
   return (
     <>
       <Grid
@@ -246,7 +404,7 @@ const Form = ({
             onChange={() =>
               router.replace(
                 `/db/edit?${obj2Query({
-                  name,
+                  name: name_,
                   type: 'yaml'
                 })}`
               )
@@ -302,14 +460,16 @@ const Form = ({
               <PriceBox
                 components={[
                   {
-                    cpu: getValues('cpu'),
-                    memory: getValues('memory'),
-                    storage: getValues('storage'),
-                    replicas: [getValues('replicas') || 1, getValues('replicas') || 1]
+                    cpu: sumNumber('cpu'),
+                    memory: sumNumber('memory'),
+                    storage: sumNumber('storage'),
+                    replicas: [sumNumber('replicas') || 1, sumNumber('replicas') || 1]
                   },
+
+                  // TODO:
                   ...(getValues('dbType') === DBTypeEnum.redis
                     ? (() => {
-                        const config = RedisHAConfig(getValues('replicas') > 1);
+                        const config = RedisHAConfig(sumNumber('replicas') > 1);
                         return [
                           {
                             ...config,
@@ -371,7 +531,7 @@ const Form = ({
                               })}
                           onClick={() => {
                             if (isEdit) return;
-                            handelChangeDbType(item.id);
+                            handleChangeDbType(item.id);
                           }}
                         >
                           <Image
@@ -431,169 +591,26 @@ const Form = ({
                   />
                 </Flex>
               </FormControl>
-              <Flex mb={10} pr={3} alignItems={'flex-start'}>
-                <Label w={100}>CPU</Label>
-                <MySlider
-                  markList={resources.CpuMarkList}
-                  activeVal={getValues('cpu')}
-                  setVal={(e) => {
-                    setValue('cpu', resources.CpuMarkList[e].value);
-                  }}
-                  max={resources.CpuMarkList.length - 1}
-                  min={resources.minCpuIndex}
-                  step={1}
-                />
-                <Box ml={5} transform={'translateY(10px)'} color={'grayModern.600'}>
-                  (Core)
-                </Box>
-              </Flex>
-              <Flex mb={'50px'} pr={3} alignItems={'center'}>
-                <Label w={100}>{t('memory')}</Label>
-                <MySlider
-                  markList={resources.MemoryMarkList}
-                  activeVal={getValues('memory')}
-                  setVal={(e) => {
-                    setValue('memory', resources.MemoryMarkList[e].value);
-                  }}
-                  max={resources.MemoryMarkList.length - 1}
-                  min={resources.minMemoryIndex}
-                  step={1}
-                />
-              </Flex>
-              <Flex mb={8} alignItems={'center'}>
-                <Label w={100}>{t('Replicas')}</Label>
-                <RangeInput
-                  w={180}
-                  value={getValues('replicas')}
-                  min={1}
-                  max={20}
-                  step={
-                    getValues('dbType') === DBTypeEnum.mongodb ||
-                    getValues('dbType') === DBTypeEnum.mysql
-                      ? 2
-                      : 1
-                  }
-                  setVal={(val) => {
-                    register('replicas', {
-                      required: t('replicas_cannot_empty'),
-                      min: {
-                        value: 1,
-                        message: `${t('min_replicas')}1`
-                      },
-                      max: {
-                        value: 20,
-                        message: `${t('max_replicas')}20`
-                      }
-                    });
-                    const dbType = getValues('dbType');
-                    const oddVal = val % 2 === 0 ? val + 1 : val;
-                    const replicasValue =
-                      dbType === DBTypeEnum.mongodb || dbType === DBTypeEnum.mysql ? oddVal : val;
-                    setValue('replicas', isNaN(replicasValue) ? 1 : replicasValue);
+              <Flex alignItems={'center'} mb={7}>
+                <Label w={100}>{t('component')}</Label>
+                <Tabs
+                  w={`${DBComponents[getValues('dbType')].length * 100}px`}
+                  list={DBComponents[getValues('dbType')].map((item) => ({
+                    label: item,
+                    id: item
+                  }))}
+                  activeId={selectComponent}
+                  size={'sm'}
+                  borderColor={'myGray.200'}
+                  onChange={(e) => {
+                    setSelectComponent(e as DBComponentsName);
                   }}
                 />
-
-                {getValues('replicas') === 1 && (
-                  <Tip
-                    ml={4}
-                    icon={<MyIcon name="warningInfo" width={'14px'}></MyIcon>}
-                    text={t('single_node_tip')}
-                    size="sm"
-                    borderRadius={'md'}
-                  />
-                )}
-                {getValues('dbType') === DBTypeEnum.redis && getValues('replicas') > 1 && (
-                  <Tip
-                    ml={4}
-                    icon={<InfoOutlineIcon />}
-                    text={t('multi_replica_redis_tip')}
-                    size="sm"
-                    borderRadius={'md'}
-                  />
-                )}
-                {(getValues('dbType') === DBTypeEnum.mongodb ||
-                  getValues('dbType') === DBTypeEnum.mysql) &&
-                  getValues('replicas') > 1 && (
-                    <Tip
-                      ml={4}
-                      icon={<InfoOutlineIcon />}
-                      text={t('db_instances_tip', {
-                        db: getValues('dbType')
-                      })}
-                      size="sm"
-                      borderRadius={'md'}
-                    />
-                  )}
               </Flex>
-
-              <FormControl isInvalid={!!errors.storage} w={'500px'}>
-                <Flex alignItems={'center'}>
-                  <Label w={100}>{t('storage')}</Label>
-                  <MyTooltip
-                    label={`${t('storage_range')}${minStorage}~${SystemEnv.STORAGE_MAX_SIZE} Gi`}
-                  >
-                    <NumberInput
-                      w={'180px'}
-                      max={SystemEnv.STORAGE_MAX_SIZE}
-                      min={minStorage}
-                      step={1}
-                      position={'relative'}
-                      value={getValues('storage')}
-                      onChange={(e) => {
-                        e !== '' ? setValue('storage', +e) : setValue('storage', minStorage);
-                      }}
-                    >
-                      <NumberInputField
-                        {...register('storage', {
-                          required: t('storage_cannot_empty'),
-                          min: {
-                            value: minStorage,
-                            message: `${t('storage_min')}${minStorage} Gi`
-                          },
-                          max: {
-                            value: SystemEnv.STORAGE_MAX_SIZE,
-                            message: `${t('storage_max')}${SystemEnv.STORAGE_MAX_SIZE} Gi`
-                          },
-                          valueAsNumber: true
-                        })}
-                        min={minStorage}
-                        max={SystemEnv.STORAGE_MAX_SIZE}
-                        borderRadius={'md'}
-                        borderColor={'#E8EBF0'}
-                        bg={'#F7F8FA'}
-                        _focusVisible={{
-                          borderColor: 'brightBlue.500',
-                          boxShadow: '0px 0px 0px 2.4px rgba(33, 155, 244, 0.15)',
-                          bg: '#FFF',
-                          color: '#111824'
-                        }}
-                        _hover={{
-                          borderColor: 'brightBlue.300'
-                        }}
-                      />
-
-                      <NumberInputStepper>
-                        <NumberIncrementStepper>
-                          <MyIcon name="arrowUp" width={'12px'} />
-                        </NumberIncrementStepper>
-                        <NumberDecrementStepper>
-                          <MyIcon name="arrowDown" width={'12px'} />
-                        </NumberDecrementStepper>
-                      </NumberInputStepper>
-                      <Box
-                        zIndex={1}
-                        position={'absolute'}
-                        right={10}
-                        top={'50%'}
-                        transform={'translateY(-50%)'}
-                        color={'grayModern.600'}
-                      >
-                        Gi
-                      </Box>
-                    </NumberInput>
-                  </MyTooltip>
-                </Flex>
-              </FormControl>
+              {/* {
+              } */}
+              <MemoResourceControl componentName={selectComponent} />
+              {JSON.stringify(fields)}
             </Box>
           </Box>
           {BackupSupportedDBTypeList.includes(getValues('dbType')) && (
